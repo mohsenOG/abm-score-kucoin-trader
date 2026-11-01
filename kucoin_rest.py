@@ -71,12 +71,12 @@ class KuCoinREST:
         server_ns = response.headers["x-out-time"].removeprefix("5-")
         return int(server_ns) // 1_000_000
 
-    def get_klines(self, *, start_at: int, end_at: int) -> List[Candle]:
+    def get_klines(self, *, start_at: int, end_at: int, symbol: Optional[str] = None) -> List[Candle]:
         response = self._request(
             "/api/ua/v2/market/kline",
             params={
                 "tradeType": "SPOT",
-                "symbol": config.SYMBOL,
+                "symbol": config.SYMBOL if symbol is None else symbol,
                 "klineType": "TRADE",
                 "interval": config.KLINE_TYPE,
                 "startAt": int(start_at),

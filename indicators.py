@@ -80,11 +80,13 @@ def _macd(s: pd.Series, fast: int, slow: int, signal: int):
     return macd_line, signal_line
 
 
-def compute_bias_and_votes(df: pd.DataFrame) -> pd.DataFrame:
+def compute_bias_and_votes(df: pd.DataFrame, *, use_heikin_ashi: bool | None = None) -> pd.DataFrame:
     out = df.copy()
     out = out[~out.index.duplicated(keep="last")].sort_index()
 
-    if config.USE_HEIKIN_ASHI:
+    if use_heikin_ashi is None:
+        use_heikin_ashi = config.USE_HEIKIN_ASHI
+    if use_heikin_ashi:
         if not {"ha_open", "ha_high", "ha_low", "ha_close"}.issubset(out.columns):
             out = compute_heikin_ashi(out)
         out["src_open"] = out["ha_open"]
