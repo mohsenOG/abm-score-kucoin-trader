@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 import config_test as cfg
+from report import write_report
 
 
 def percentage_range(start: float, stop: float, step: float) -> np.ndarray:
@@ -203,3 +204,6 @@ def run_backtest(history: pd.DataFrame, signals_path: Path) -> None:
         print(f"\nChronological validation ({cfg.TRAIN_FRACTION:.0%}/{1 - cfg.TRAIN_FRACTION:.0%} of signals):")
         print(validation.to_string(index=False, float_format=lambda value: f"{value:.4f}"))
         print(f"Validation saved: {validation_path}")
+    report_path = prefix.with_name(prefix.name + "_report.html")
+    write_report(history, signals, results, validation, signals_path, heatmap_path, report_path)
+    print(f"HTML dashboard: {report_path}")

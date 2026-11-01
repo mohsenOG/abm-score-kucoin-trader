@@ -24,3 +24,4 @@ FEE_PER_SIDE_PCT = 0.06
 RETURN_DECIMALS = 12  # Remove floating-point noise at exactly break-even returns.
 TRAIN_FRACTION = 0.70
 TOP_N = 10
+REPORT_PAGE_SIZE = 25

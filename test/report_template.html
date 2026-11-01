@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SL/TP Backtest Report</title>
+  <style>
+    :root { color-scheme: light; --ink:#172331; --muted:#526274; --line:#dce3e9; --green:#087447; --red:#b42336; --accent:#2458ad; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#f5f7fa; color:var(--ink); font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:1280px; margin:auto; padding:36px 24px 56px; }
+    header,.section-heading,.toolbar,.pagination { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:14px; }
+    h1 { font-size:30px; letter-spacing:-1px; margin:2px 0; }
+    h2 { font-size:20px; margin:0; letter-spacing:-.3px; }
+    h3 { font-size:16px; margin:0 0 12px; }
+    p { margin:8px 0 16px; }
+    .eyebrow { font-size:11px; font-weight:700; letter-spacing:1.3px; text-transform:uppercase; color:var(--muted); }
+    .muted,.hint { color:var(--muted); }
+    .offline,.badge { display:inline-block; border-radius:5px; padding:3px 8px; font-size:11px; font-weight:700; background:#edf4ff; color:var(--accent); }
+    section { margin-top:24px; border:1px solid var(--line); border-radius:12px; background:white; padding:24px; }
+    .section-heading { margin-bottom:18px; }
+    dl { margin:0; }
+    .metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:22px; }
+    dt { font-size:12px; color:var(--muted); margin-bottom:5px; }
+    dd { margin:0; font-size:20px; font-weight:650; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+    .range { grid-column:span 2; }
+    .range dd,.fees dd { font-size:14px; font-weight:550; }
+    .note { margin:20px 0 0; padding:14px 16px; border-left:3px solid var(--accent); background:#f4f7fc; font-size:13px; }
+    .positive { color:var(--green); }
+    .negative { color:var(--red); }
+    .table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:8px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums; }
+    th,td { text-align:right; padding:11px 13px; border-bottom:1px solid #e9edf1; white-space:nowrap; }
+    th { background:#f6f8fb; color:var(--muted); font-size:11px; font-weight:650; }
+    th:first-child,td:first-child { text-align:left; }
+    tbody tr:last-child td { border-bottom:0; }
+    tbody tr:hover { background:#f7f9fc; }
+    tr.best { background:#eef5ff; box-shadow:inset 3px 0 var(--accent); }
+    .best .badge { margin-left:7px; background:#dae9ff; }
+    button,input,select,.button { font:inherit; color:var(--ink); border:1px solid #cbd5df; background:white; border-radius:6px; padding:8px 11px; }
+    button,.button { cursor:pointer; text-decoration:none; }
+    button:hover,.button:hover { border-color:var(--accent); background:#f4f7fc; }
+    button:disabled { cursor:default; opacity:.4; }
+    :focus-visible { outline:3px solid #6297eb; outline-offset:2px; }
+    th button { padding:0; border:0; border-radius:0; background:none; color:inherit; font:inherit; width:100%; text-align:inherit; }
+    th button:hover { background:none; }
+    .toolbar { align-items:end; justify-content:flex-start; margin:14px 0; gap:12px; }
+    label { display:flex; flex-direction:column; gap:5px; font-size:12px; color:var(--muted); }
+    label.search { flex:1 1 190px; }
+    input[type=search] { width:100%; }
+    select { min-width:95px; }
+    .pagination { margin-top:14px; }
+    .page-controls { display:flex; gap:9px; align-items:center; }
+    .page-controls label { display:flex; flex-direction:row; align-items:center; }
+    #page { width:70px; }
+    .heatmap { margin:24px 0; }
+    #heatmap { max-width:780px; margin:auto; }
+    #heatmap svg { display:block; width:100%; height:auto; }
+    #heatmap rect.cell { cursor:pointer; }
+    #heatmap rect.cell:hover,#heatmap rect.cell:focus { stroke:#172331; stroke-width:2; outline:none; }
+    #heatmap rect.best-cell { stroke:#2458ad; stroke-width:2; }
+    #tooltip { position:fixed; z-index:5; pointer-events:none; max-width:calc(100vw - 24px); padding:12px 15px; border:1px solid var(--line); border-radius:8px; background:white; box-shadow:0 6px 24px #17233126; white-space:pre-line; font-size:12px; font-variant-numeric:tabular-nums; }
+    .empty { padding:24px; text-align:center; color:var(--muted); }
+    footer { margin-top:22px; color:var(--muted); font-size:12px; }
+    [hidden] { display:none !important; }
+    @media(max-width:760px) { main { padding:22px 12px; } section { padding:18px 14px; } .metrics { grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; } h1 { font-size:25px; } dd { font-size:18px; } .toolbar label { flex:1 1 110px; } }
+    @media(max-width:420px) { .metrics { grid-template-columns:1fr; } .range { grid-column:auto; } .page-controls { flex-wrap:wrap; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><div class="eyebrow" id="report-symbol">Backtest results</div><h1>SL / TP backtest</h1><div class="muted">Independent trades. Fixed exits. Returns after fees.</div></div>
+    <span class="offline">Offline report</span>
+  </header>
+  <noscript><p class="note">Enable JavaScript to view the embedded result tables and controls. No internet connection is needed.</p></noscript>
+
+  <section aria-labelledby="overview-title">
+    <div class="section-heading"><div><div class="eyebrow">01 / Overview</div><h2 id="overview-title">Backtest details</h2></div></div>
+    <dl class="metrics" id="overview"></dl>
+    <p class="note"><strong>Total Net Profit is the sum of independent 1x trade returns in percentage points (pp), not portfolio growth.</strong> Average Net Profit per Trade is Total Net Profit divided by Completed Trades, expressed as a percentage per trade. Open trades and pending entries are excluded from these metrics and win rate.</p>
+  </section>
+
+  <section aria-labelledby="best-title">
+    <div class="section-heading"><div><div class="eyebrow">02 / Best overall combination</div><h2 id="best-title">Highest total net profit</h2></div><span class="badge" id="best-pair"></span></div>
+    <dl class="metrics" id="best-metrics"></dl>
+    <p class="hint" id="no-completed" hidden>No trades completed. Win rate and average profit are unavailable; the highlighted row follows the existing ranking.</p>
+  </section>
+
+  <section aria-labelledby="optimization-title">
+    <div class="section-heading"><div><div class="eyebrow">03 / Optimization results</div><h2 id="optimization-title">Inspect every combination</h2></div><a class="button" id="download">Download all results as CSV</a></div>
+    <h3 id="top-title">Top 10 combinations</h3>
+    <div class="table-wrap"><table id="top-table" aria-labelledby="top-title"><thead></thead><tbody></tbody></table></div>
+    <div class="heatmap">
+      <h3>SL / TP profit heatmap</h3>
+      <p class="hint">Hover or focus a cell for trade details. Click a cell to find its row below. Use arrow keys to move between cells and Enter to select. Blue outline: best combination.</p>
+      <div id="heatmap"><!-- HEATMAP --></div>
+    </div>
+    <h3 id="all-title">All combinations</h3>
+    <div class="toolbar" id="filters">
+      <label class="search">Search all values<input id="search" type="search" placeholder="Search combinations" autocomplete="off"></label>
+      <label>SL<select id="sl"><option value="">All SL values</option></select></label>
+      <label>TP<select id="tp"><option value="">All TP values</option></select></label>
+      <label>Net profit<select id="profit"><option value="all">All results</option><option value="positive">Profit &gt; 0</option><option value="negative">Loss &lt; 0</option><option value="zero">Break-even</option></select></label>
+      <label>Rows per page<select id="page-size"></select></label>
+      <button id="reset" type="button">Reset filters</button>
+    </div>
+    <div class="table-wrap"><table id="all-table" aria-labelledby="all-title"><thead></thead><tbody></tbody></table></div>
+    <div class="pagination">
+      <span id="result-count" class="muted" role="status" aria-live="polite"></span>
+      <div class="page-controls"><button id="previous" type="button">Previous</button><label>Page<input id="page" type="number" min="1" value="1" aria-label="Page number"></label><span id="page-count" class="muted"></span><button id="next" type="button">Next</button></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="validation-title">
+    <div class="section-heading"><div><div class="eyebrow">04 / Chronological validation</div><h2 id="validation-title">70/30 validation</h2></div><span class="badge" id="validation-pair" hidden></span></div>
+    <p class="hint" id="validation-note"></p>
+    <div class="table-wrap" id="validation-wrap"><table id="validation-table" aria-labelledby="validation-title"><thead></thead><tbody></tbody></table></div>
+  </section>
+  <footer id="footer"></footer>
+</main>
+<div id="tooltip" role="tooltip" hidden></div>
+<script type="application/json" id="report-data">/* REPORT_DATA */</script>
+<script>
+"use strict";
+const data = JSON.parse(document.getElementById("report-data").textContent);
+const results = data.results;
+const best = results[0];
+const $ = id => document.getElementById(id);
+const number = value => Number.isFinite(value) ? value.toFixed(2) : "N/A";
+const integer = value => value.toLocaleString("en-US");
+const tone = value => value > 0 ? "positive" : value < 0 ? "negative" : "";
+const utc = value => value.replace("T", " ").replace("+00:00", " UTC");
+const isBest = row => row.SL === best.SL && row.TP === best.TP;
+const columns = [
+  {key:"SL", unit:"%"}, {key:"TP", unit:"%"}, {key:"Win Rate", unit:"%"},
+  {key:"Total Net Profit", unit:" pp", profit:true},
+  {key:"Average Net Profit per Trade", unit:"%", profit:true},
+  {key:"Completed Trades", count:true}, {key:"Open Trades", count:true}
+];
+const format = (value, column) => column.count ? integer(value) : Number.isFinite(value) ? number(value) + column.unit : "N/A";
+
+function metric(target, label, value, className = "", valueClass = "") {
+  const item = document.createElement("div");
+  item.className = className;
+  const term = document.createElement("dt"), detail = document.createElement("dd");
+  term.textContent = label;
+  detail.textContent = value;
+  detail.className = valueClass;
+  item.append(term, detail);
+  $(target).append(item);
+}
+
+$("report-symbol").textContent = `${data.symbol} / ${data.timeframe}`;
+document.title = `${data.symbol} ${data.timeframe} / SL/TP Backtest`;
+metric("overview", "Symbol", data.symbol);
+metric("overview", "Timeframe", data.timeframe);
+metric("overview", "OHLC range: first Open to final Close (UTC)", `${utc(data.start)} to ${utc(data.end)}`, "range");
+metric("overview", "Total signals", integer(data.signals));
+metric("overview", "Combinations tested", integer(results.length));
+metric("overview", "Trading fees", `${number(data.fee)}% entry + ${number(data.fee)}% exit; flat ${number(2 * data.fee)} pp per completed trade`, "fees");
+metric("overview", "Warmup candles excluded from signals", integer(data.warmup));
+$("best-pair").textContent = `SL ${number(best.SL)}% / TP ${number(best.TP)}%`;
+for (const column of columns) metric("best-metrics", column.key, format(best[column.key], column), "", column.profit ? tone(best[column.key]) : "");
+metric("best-metrics", "Pending Entries", integer(best["Pending Entries"]));
+$("no-completed").hidden = best["Completed Trades"] > 0;
+$("footer").textContent = `All ${integer(results.length)} combinations and the SVG heatmap are embedded in this file. Pending entries are signals without a next candle. All timestamps are UTC.`;
+
+function rows(tableId, entries, fields = columns) {
+  const body = $(tableId).tBodies[0];
+  body.replaceChildren();
+  for (const row of entries) {
+    const tr = body.insertRow();
+    if (tableId !== "validation-table" && isBest(row)) tr.className = "best";
+    for (const [index, column] of fields.entries()) {
+      const td = tr.insertCell();
+      td.textContent = column.text ? row[column.key] : format(row[column.key], column);
+      if (column.profit) td.className = tone(row[column.key]);
+      if (index === 0 && tr.className === "best") {
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = "Best";
+        td.append(badge);
+      }
+    }
+  }
+  if (!entries.length) {
+    const td = body.insertRow().insertCell();
+    td.colSpan = fields.length;
+    td.className = "empty";
+    td.textContent = "No matching combinations. Change or reset the filters.";
+  }
+}
+
+let sortKey = "Total Net Profit", sortDirection = -1, page = 1;
+function headings(tableId, fields = columns) {
+  const head = $(tableId).tHead;
+  head.replaceChildren();
+  const tr = head.insertRow();
+  for (const column of fields) {
+    const th = document.createElement("th");
+    th.scope = "col";
+    const label = column.key + (column.unit ? ` (${column.unit.trim()})` : "");
+    if (tableId === "all-table") {
+      const active = column.key === sortKey;
+      th.setAttribute("aria-sort", active ? (sortDirection === 1 ? "ascending" : "descending") : "none");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label + (active ? (sortDirection === 1 ? " ↑" : " ↓") : " ↕");
+      button.addEventListener("click", () => {
+        sortDirection = column.key === sortKey ? -sortDirection : 1;
+        sortKey = column.key;
+        page = 1;
+        render();
+        $("all-table").tHead.querySelectorAll("button")[columns.indexOf(column)].focus();
+      });
+      th.append(button);
+    } else th.textContent = label;
+    tr.append(th);
+  }
+}
+
+$("top-title").textContent = `Top ${Math.min(data.topN, results.length)} combinations`;
+headings("top-table");
+rows("top-table", results.slice(0, data.topN));
+for (const key of ["SL", "TP"]) {
+  for (const value of [...new Set(results.map(row => row[key]))].sort((a, b) => a - b)) {
+    $(key.toLowerCase()).add(new Option(number(value) + "%", String(value)));
+  }
+}
+for (const size of [...new Set([10, 25, 50, 100, data.pageSize])].sort((a,b) => a-b)) $("page-size").add(new Option(String(size), String(size)));
+$("page-size").add(new Option("All", "all"));
+$("page-size").value = String(data.pageSize);
+
+function render() {
+  const terms = $("search").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const profit = $("profit").value;
+  const filtered = results.filter(row => {
+    const net = row["Total Net Profit"];
+    const text = columns.map(column => `${column.key} ${format(row[column.key], column)}`).join(" ").toLowerCase();
+    return (!$("sl").value || row.SL === Number($("sl").value)) &&
+      (!$("tp").value || row.TP === Number($("tp").value)) &&
+      (profit === "all" || (profit === "positive" && net > 0) || (profit === "negative" && net < 0) || (profit === "zero" && net === 0)) &&
+      terms.every(term => text.includes(term));
+  });
+  filtered.sort((a, b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    if (av === null) return bv === null ? 0 : 1;
+    if (bv === null) return -1;
+    return sortDirection * (av - bv);
+  });
+  const size = $("page-size").value === "all" ? Math.max(filtered.length, 1) : Number($("page-size").value);
+  const pages = Math.max(1, Math.ceil(filtered.length / size));
+  page = Math.max(1, Math.min(page, pages));
+  const start = (page - 1) * size;
+  headings("all-table");
+  rows("all-table", filtered.slice(start, start + size));
+  $("result-count").textContent = `Showing ${filtered.length ? integer(start + 1) : 0}–${integer(Math.min(start + size, filtered.length))} of ${integer(filtered.length)} matching combinations (${integer(results.length)} total)`;
+  $("page").value = String(page);
+  $("page").max = String(pages);
+  $("page-count").textContent = `of ${integer(pages)}`;
+  $("previous").disabled = page === 1;
+  $("next").disabled = page === pages;
+}
+
+for (const id of ["search", "sl", "tp", "profit", "page-size"]) $(id).addEventListener(id === "search" ? "input" : "change", () => { page = 1; render(); });
+$("previous").addEventListener("click", () => { page--; render(); });
+$("next").addEventListener("click", () => { page++; render(); });
+$("page").addEventListener("change", () => { page = Math.trunc(Number($("page").value)) || 1; render(); });
+$("reset").addEventListener("click", () => {
+  for (const id of ["search", "sl", "tp"]) $(id).value = "";
+  $("profit").value = "all";
+  page = 1;
+  render();
+});
+render();
+
+const csvFields = [...columns.map(column => column.key), "Pending Entries"];
+const csv = [csvFields.join(","), ...results.map(row => csvFields.map(key => row[key] ?? "").join(","))].join("\r\n");
+$("download").href = URL.createObjectURL(new Blob([csv], {type:"text/csv;charset=utf-8"}));
+$("download").download = data.csvName;
+
+const trainingPct = number(data.trainFraction * 100), validationPct = number((1 - data.trainFraction) * 100);
+$("validation-title").textContent = `${trainingPct}% / ${validationPct}% validation`;
+if (data.validation.length) {
+  const selected = data.validation[0];
+  $("validation-pair").hidden = false;
+  $("validation-pair").textContent = `Training selection: SL ${number(selected.SL)}% / TP ${number(selected.TP)}%`;
+  $("validation-note").textContent = `The pair was selected using only the first ${trainingPct}% of signals and candles before ${utc(selected["Boundary UTC"])}. Training trades still open at that boundary are excluded from training profit. The same pair was evaluated on the remaining ${validationPct}% of signals without refitting.`;
+  const fields = [{key:"Set", text:true}, ...columns, {key:"Pending Entries", count:true}, {key:"Signals", count:true}];
+  headings("validation-table", fields);
+  rows("validation-table", data.validation, fields);
+} else {
+  $("validation-wrap").hidden = true;
+  $("validation-note").textContent = "Validation unavailable: both signal sets need at least one signal and at least one training trade must complete before the boundary.";
+}
+
+// Enrich the embedded copy only. The original SVG output stays unchanged.
+const svg = $("heatmap").querySelector("svg");
+const slLevels = [...new Set(results.map(row => row.SL))].sort((a,b) => b-a);
+const tpLevels = [...new Set(results.map(row => row.TP))].sort((a,b) => a-b);
+const byPair = new Map(results.map(row => [`${row.SL}:${row.TP}`, row]));
+const cells = [...svg.querySelectorAll("rect")].filter(rect => rect.querySelector("title"));
+const tooltip = $("tooltip");
+svg.setAttribute("role", "group");
+svg.setAttribute("aria-label", "SL/TP total net profit heatmap; arrow keys move, Enter selects a combination");
+for (const text of svg.querySelectorAll("text")) if (/^-?\d+(\.\d+)?$/.test(text.textContent)) text.textContent = number(Number(text.textContent));
+function showTooltip(cell, event) {
+  tooltip.textContent = cell.getAttribute("aria-label");
+  tooltip.hidden = false;
+  const bounds = cell.getBoundingClientRect();
+  const x = event.clientX ?? bounds.right, y = event.clientY ?? bounds.top;
+  tooltip.style.left = `${Math.max(12, Math.min(x + 14, innerWidth - tooltip.offsetWidth - 12))}px`;
+  tooltip.style.top = `${Math.max(12, Math.min(y + 14, innerHeight - tooltip.offsetHeight - 12))}px`;
+}
+for (const [index, cell] of cells.entries()) {
+  const row = byPair.get(`${slLevels[Math.floor(index / tpLevels.length)]}:${tpLevels[index % tpLevels.length]}`);
+  const details = columns.map(column => `${column.key}: ${format(row[column.key], column)}`).join("\n") + `\nPending Entries: ${integer(row["Pending Entries"])}`;
+  cell.classList.add("cell");
+  if (isBest(row)) cell.classList.add("best-cell");
+  cell.querySelector("title").textContent = details;
+  cell.setAttribute("role", "button");
+  cell.setAttribute("aria-label", details);
+  cell.setAttribute("tabindex", isBest(row) ? "0" : "-1");
+  cell.addEventListener("pointermove", event => showTooltip(cell, event));
+  cell.addEventListener("pointerleave", () => { tooltip.hidden = true; });
+  cell.addEventListener("focus", event => showTooltip(cell, event));
+  cell.addEventListener("blur", () => { tooltip.hidden = true; });
+  cell.addEventListener("click", () => {
+    $("sl").value = String(row.SL);
+    $("tp").value = String(row.TP);
+    $("search").value = "";
+    $("profit").value = "all";
+    page = 1;
+    render();
+    tooltip.hidden = true;
+    $("all-title").scrollIntoView({block:"start"});
+  });
+  cell.addEventListener("keydown", event => {
+    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); cell.dispatchEvent(new Event("click")); }
+    const offset = {ArrowLeft:-1, ArrowRight:1, ArrowUp:-tpLevels.length, ArrowDown:tpLevels.length}[event.key];
+    if (offset !== undefined) {
+      event.preventDefault();
+      const next = cells[Math.max(0, Math.min(cells.length - 1, index + offset))];
+      for (const item of cells) item.setAttribute("tabindex", "-1");
+      next.setAttribute("tabindex", "0");
+      next.focus();
+    }
+    if (event.key === "Escape") tooltip.hidden = true;
+  });
+}
+document.addEventListener("keydown", event => { if (event.key === "Escape") tooltip.hidden = true; });
+window.addEventListener("scroll", () => { tooltip.hidden = true; }, {passive:true});
+</script>
+</body>
+</html>

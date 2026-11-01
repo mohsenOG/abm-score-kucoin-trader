@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
+import re
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -19,6 +21,7 @@ import config_test as cfg
 from backtest import chronological_validation, optimize, percentage_range, write_heatmap
 from indicators import compute_bias_and_votes
 from main_test import write_signals
+from report import report_records, write_report
 from signals import compute_signals
 
 
@@ -142,6 +145,34 @@ def check() -> None:
         path = Path(directory) / "heatmap.svg"
         write_heatmap(grid, path)
         assert ElementTree.parse(path).getroot().tag.endswith("svg")
+        # The report embeds every result and the original SVG, without mutating inputs.
+        full = optimize(history, signals(history, [200, 230, 259], ["BUY", "SELL", "BUY"]))
+        original = full.copy(deep=True)
+        write_heatmap(full, path)
+        validation_before = validation.copy(deep=True)
+        report_path = Path(directory) / "CHECK-USDT_run_report.html"
+        write_report(history, saved, full, validation, Path("CHECK-USDT_signals.csv"), path, report_path)
+        html = report_path.read_text(encoding="utf-8")
+        payload = json.loads(re.search(r'<script type="application/json" id="report-data">(.*?)</script>', html, re.S).group(1))
+        assert len(payload["results"]) == 2500
+        assert payload["csvName"] == "CHECK-USDT_run_results.csv"
+        assert path.read_text(encoding="utf-8") in html
+        assert not re.search(r'<(?:script|link)[^>]+(?:src|href)=', html)
+        for source, records in ((full, payload["results"]), (validation, payload["validation"])):
+            for (_, row), record in zip(source.iterrows(), records):
+                if row["Completed Trades"]:
+                    assert np.isclose(record["Average Net Profit per Trade"], row["Total Net Profit"] / row["Completed Trades"])
+                else:
+                    assert record["Average Net Profit per Trade"] is None
+        assert report_records(pd.DataFrame()) == []
+        no_completed = pd.DataFrame({"Total Net Profit": [0.0], "Completed Trades": [0]})
+        assert report_records(no_completed)[0]["Average Net Profit per Trade"] is None
+        # Metadata must not escape the JSON script element.
+        escaped_path = Path(directory) / "escaped_report.html"
+        write_report(history, saved, full, pd.DataFrame(), Path("<script>_signals.csv"), path, escaped_path)
+        assert '"symbol": "\\u003cscript>"' in escaped_path.read_text(encoding="utf-8")
+        pd.testing.assert_frame_equal(full, original)
+        pd.testing.assert_frame_equal(validation, validation_before)
     print("Backtest checks passed.")
 
 
