@@ -79,12 +79,13 @@
     <div class="section-heading"><div><div class="eyebrow">01 / Overview</div><h2 id="overview-title">Backtest details</h2></div></div>
     <dl class="metrics" id="overview"></dl>
     <p class="note"><strong>Total Net Profit is the sum of independent 1x trade returns in percentage points (pp), not portfolio growth.</strong> Average Net Profit per Trade is Total Net Profit divided by Completed Trades, expressed as a percentage per trade. Open trades and pending entries are excluded from these metrics and win rate.</p>
+    <p class="hint" id="holding-note"></p>
   </section>
 
   <section aria-labelledby="best-title">
     <div class="section-heading"><div><div class="eyebrow">02 / Best overall combination</div><h2 id="best-title">Highest total net profit</h2></div><span class="badge" id="best-pair"></span></div>
     <dl class="metrics" id="best-metrics"></dl>
-    <p class="hint" id="no-completed" hidden>No trades completed. Win rate and average profit are unavailable; the highlighted row follows the existing ranking.</p>
+    <p class="hint" id="no-completed" hidden>No trades completed. Win rate, average profit, holding times, and TP hit rate are unavailable; the highlighted row follows the existing ranking.</p>
   </section>
 
   <section aria-labelledby="optimization-title">
@@ -136,7 +137,12 @@ const columns = [
   {key:"SL", unit:"%"}, {key:"TP", unit:"%"}, {key:"Win Rate", unit:"%"},
   {key:"Total Net Profit", unit:" pp", profit:true},
   {key:"Average Net Profit per Trade", unit:"%", profit:true},
-  {key:"Completed Trades", count:true}, {key:"Open Trades", count:true}
+  {key:"Completed Trades", count:true}, {key:"Open Trades", count:true},
+  {key:"avg_holding_hours", label:"Average Holding Time", unit:" h"},
+  {key:"p95_holding_hours", label:"P95 Holding Time", unit:" h", top:false},
+  {key:"p99_holding_hours", label:"P99 Holding Time", unit:" h", top:false},
+  {key:"max_holding_hours", label:"Max Holding Time", unit:" h", top:false},
+  {key:"tp_hit_rate_pct", label:"TP Hit Rate", unit:"%"}
 ];
 const format = (value, column) => column.count ? integer(value) : Number.isFinite(value) ? number(value) + column.unit : "N/A";
 
@@ -161,9 +167,10 @@ metric("overview", "Combinations tested", integer(results.length));
 metric("overview", "Trading fees", `${number(data.fee)}% entry + ${number(data.fee)}% exit; flat ${number(2 * data.fee)} pp per completed trade`, "fees");
 metric("overview", "Warmup candles excluded from signals", integer(data.warmup));
 $("best-pair").textContent = `SL ${number(best.SL)}% / TP ${number(best.TP)}%`;
-for (const column of columns) metric("best-metrics", column.key, format(best[column.key], column), "", column.profit ? tone(best[column.key]) : "");
+for (const column of columns) metric("best-metrics", column.label || column.key, format(best[column.key], column), "", column.profit ? tone(best[column.key]) : "");
 metric("best-metrics", "Pending Entries", integer(best["Pending Entries"]));
 $("no-completed").hidden = best["Completed Trades"] > 0;
+$("holding-note").textContent = `Holding times use completed trades only and are candle-level estimates, not exact intrabar durations. Entry uses candle Open. Exits reached at candle Open use that timestamp; intrabar exits use candle Close. P95 and P99 use ${data.holdingPercentileMethod} interpolation. TP Hit Rate counts all TP exits, including trades with a net loss after fees.`;
 $("footer").textContent = `All ${integer(results.length)} combinations and the SVG heatmap are embedded in this file. Pending entries are signals without a next candle. All timestamps are UTC.`;
 
 function rows(tableId, entries, fields = columns) {
@@ -200,7 +207,7 @@ function headings(tableId, fields = columns) {
   for (const column of fields) {
     const th = document.createElement("th");
     th.scope = "col";
-    const label = column.key + (column.unit ? ` (${column.unit.trim()})` : "");
+    const label = (column.label || column.key) + (column.unit ? ` (${column.unit.trim()})` : "");
     if (tableId === "all-table") {
       const active = column.key === sortKey;
       th.setAttribute("aria-sort", active ? (sortDirection === 1 ? "ascending" : "descending") : "none");
@@ -221,8 +228,9 @@ function headings(tableId, fields = columns) {
 }
 
 $("top-title").textContent = `Top ${Math.min(data.topN, results.length)} combinations`;
-headings("top-table");
-rows("top-table", results.slice(0, data.topN));
+const topColumns = columns.filter(column => column.top !== false);
+headings("top-table", topColumns);
+rows("top-table", results.slice(0, data.topN), topColumns);
 for (const key of ["SL", "TP"]) {
   for (const value of [...new Set(results.map(row => row[key]))].sort((a, b) => a - b)) {
     $(key.toLowerCase()).add(new Option(number(value) + "%", String(value)));
@@ -237,7 +245,7 @@ function render() {
   const profit = $("profit").value;
   const filtered = results.filter(row => {
     const net = row["Total Net Profit"];
-    const text = columns.map(column => `${column.key} ${format(row[column.key], column)}`).join(" ").toLowerCase();
+    const text = columns.map(column => `${column.label || column.key} ${format(row[column.key], column)}`).join(" ").toLowerCase();
     return (!$("sl").value || row.SL === Number($("sl").value)) &&
       (!$("tp").value || row.TP === Number($("tp").value)) &&
       (profit === "all" || (profit === "positive" && net > 0) || (profit === "negative" && net < 0) || (profit === "zero" && net === 0)) &&
@@ -315,7 +323,7 @@ function showTooltip(cell, event) {
 }
 for (const [index, cell] of cells.entries()) {
   const row = byPair.get(`${slLevels[Math.floor(index / tpLevels.length)]}:${tpLevels[index % tpLevels.length]}`);
-  const details = columns.map(column => `${column.key}: ${format(row[column.key], column)}`).join("\n") + `\nPending Entries: ${integer(row["Pending Entries"])}`;
+  const details = columns.map(column => `${column.label || column.key}: ${format(row[column.key], column)}`).join("\n") + `\nPending Entries: ${integer(row["Pending Entries"])}`;
   cell.classList.add("cell");
   if (isBest(row)) cell.classList.add("best-cell");
   cell.querySelector("title").textContent = details;

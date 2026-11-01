@@ -40,6 +40,7 @@ def write_report(
         "trainFraction": cfg.TRAIN_FRACTION,
         "topN": cfg.TOP_N,
         "pageSize": cfg.REPORT_PAGE_SIZE,
+        "holdingPercentileMethod": cfg.HOLDING_PERCENTILE_METHOD,
         "csvName": report_path.name.removesuffix("_report.html") + "_results.csv",
         "results": report_records(results),
         "validation": report_records(validation),

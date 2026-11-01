@@ -66,9 +66,14 @@ def optimize(
     shape = (len(sl), len(tp))
     completed = np.zeros(shape, dtype=int)
     wins = np.zeros(shape, dtype=int)
+    tp_exits = np.zeros(shape, dtype=int)
     total = np.zeros(shape)
+    # ponytail: Exact percentiles store O(signals * combinations) durations; use duration histograms for much larger runs.
+    holding_hours = np.full((len(signals), *shape), np.nan)
+    candle_hours = ((history.index - history.index[0]) / pd.Timedelta(hours=1)).to_numpy()
+    timeframe_hours = delta / pd.Timedelta(hours=1)
     pending = 0
-    for position, side in zip(signal_positions, signals["side"]):
+    for signal_number, (position, side) in enumerate(zip(signal_positions, signals["side"])):
         entry_index = position + 1
         if entry_index == len(history):
             pending += 1
@@ -97,10 +102,27 @@ def optimize(
         net = np.round(direction * (exit_price / entry - 1) * 100 - 2 * cfg.FEE_PER_SIDE_PCT, cfg.RETURN_DECIMALS)
         completed += closed
         wins += closed & (net > 0)
+        tp_exits += closed & ~stopped
         total += np.where(closed, net, 0)
+        # Use the selected exit only: SL still wins a TP-gap/SL intrabar tie.
+        at_open = np.where(stopped, exit_open <= direction * stops[:, None], exit_open >= direction * targets[None, :])
+        exit_hours = candle_hours[entry_index + np.minimum(exit_at, len(adverse) - 1)]
+        duration = exit_hours - candle_hours[entry_index] + np.where(at_open, 0, timeframe_hours)
+        holding_hours[signal_number] = np.where(closed, duration, np.nan)
 
     win_rate = np.full(shape, np.nan)
     np.divide(100 * wins, completed, out=win_rate, where=completed > 0)
+    tp_hit_rate = np.full(shape, np.nan)
+    np.divide(100 * tp_exits, completed, out=tp_hit_rate, where=completed > 0)
+    avg_holding, p95_holding, p99_holding, max_holding = (np.full(shape, np.nan) for _ in range(4))
+    for row, column in zip(*np.nonzero(completed)):
+        durations = holding_hours[:, row, column]
+        durations = durations[~np.isnan(durations)]
+        avg_holding[row, column] = durations.mean()
+        p95_holding[row, column], p99_holding[row, column] = np.percentile(
+            durations, cfg.HOLDING_PERCENTILES, method=cfg.HOLDING_PERCENTILE_METHOD
+        )
+        max_holding[row, column] = durations.max()
     results = pd.DataFrame({
         "SL": np.repeat(sl, len(tp)),
         "TP": np.tile(tp, len(sl)),
@@ -109,6 +131,11 @@ def optimize(
         "Completed Trades": completed.ravel(),
         "Open Trades": (len(signals) - pending - completed).ravel(),
         "Pending Entries": pending,
+        "avg_holding_hours": avg_holding.ravel(),
+        "p95_holding_hours": p95_holding.ravel(),
+        "p99_holding_hours": p99_holding.ravel(),
+        "max_holding_hours": max_holding.ravel(),
+        "tp_hit_rate_pct": tp_hit_rate.ravel(),
     })
     return results.sort_values("Total Net Profit", ascending=False, kind="stable").reset_index(drop=True)
 

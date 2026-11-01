@@ -25,3 +25,5 @@ RETURN_DECIMALS = 12  # Remove floating-point noise at exactly break-even return
 TRAIN_FRACTION = 0.70
 TOP_N = 10
 REPORT_PAGE_SIZE = 25
+HOLDING_PERCENTILES = (95, 99)
+HOLDING_PERCENTILE_METHOD = "linear"

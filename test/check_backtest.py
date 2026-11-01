@@ -38,6 +38,7 @@ def signals(history: pd.DataFrame, positions: list[int], sides: list[str]) -> pd
 
 
 def check() -> None:
+    metric_columns = ["avg_holding_hours", "p95_holding_hours", "p99_holding_hours", "max_holding_hours", "tp_hit_rate_pct"]
     assert len(percentage_range(0.1, 5.0, 0.1)) == 50
     assert np.array_equal(percentage_range(0.1, 0.3, 0.1), [0.1, 0.2, 0.3])
     for args in ((0, 5, 0.1), (0.1, 5, 0), (0.1, 0.25, 0.1)):
@@ -55,6 +56,7 @@ def check() -> None:
             result = optimize(history, signals(history, [0], [side]), [1], [1]).iloc[0]
             assert result["Completed Trades"] == 1 and result["Win Rate"] == 100
             assert np.isclose(result["Total Net Profit"], 0.88)
+            assert result[metric_columns].tolist() == [1, 1, 1, 1, 100]
 
         # Both levels in one candle: SL wins for BUY and SELL.
         for side in ("BUY", "SELL"):
@@ -62,24 +64,37 @@ def check() -> None:
             result = optimize(history, signals(history, [0], [side]), [1], [1]).iloc[0]
             assert np.isclose(result["Total Net Profit"], -1.12)
             assert result["Win Rate"] == 0
+            assert result[metric_columns].tolist() == [1, 1, 1, 1, 0]
 
         # Gap fills in both directions, with TP-gap/SL ties also losing.
-        for side, gap, expected in (
-            ("BUY", (98, 98.5, 97, 98), -2.12),
-            ("BUY", (102, 103, 101.5, 102), 1.88),
-            ("SELL", (102, 103, 101.5, 102), -2.12),
-            ("SELL", (98, 98.5, 97, 98), 1.88),
-            ("BUY", (102, 103, 98, 100), -1.12),
-            ("SELL", (98, 102, 97, 100), -1.12),
+        for side, gap, expected, duration in (
+            ("BUY", (98, 98.5, 97, 98), -2.12, 1),
+            ("BUY", (102, 103, 101.5, 102), 1.88, 1),
+            ("SELL", (102, 103, 101.5, 102), -2.12, 1),
+            ("SELL", (98, 98.5, 97, 98), 1.88, 1),
+            ("BUY", (102, 103, 98, 100), -1.12, 2),
+            ("SELL", (98, 102, 97, 100), -1.12, 2),
         ):
             history = candles([(100, 100, 100, 100), (100, 100.2, 99.8, 100), gap])
             result = optimize(history, signals(history, [0], [side]), [1], [1]).iloc[0]
             assert np.isclose(result["Total Net Profit"], expected), (side, gap, result)
+            assert result["avg_holding_hours"] == duration
+            assert result["tp_hit_rate_pct"] == (100 if expected > 0 else 0)
+
+        # A level reached exactly at Open has a known exit timestamp too.
+        for side, exit_row in (
+            ("BUY", (99, 99.5, 98.5, 99)), ("BUY", (101, 101.5, 100.5, 101)),
+            ("SELL", (99, 99.5, 98.5, 99)), ("SELL", (101, 101.5, 100.5, 101)),
+        ):
+            history = candles([(100, 100, 100, 100), (100, 100, 100, 100), exit_row])
+            result = optimize(history, signals(history, [0], [side]), [1], [1]).iloc[0]
+            assert result["avg_holding_hours"] == 1
 
         # A TP below fees is a net loss, not a win.
         history = candles([(100, 100, 100, 100), (100, 100.2, 100, 100.1)])
         result = optimize(history, signals(history, [0], ["BUY"]), [1], [0.1]).iloc[0]
         assert np.isclose(result["Total Net Profit"], -0.02) and result["Win Rate"] == 0
+        assert result["tp_hit_rate_pct"] == 100
         result = optimize(history, signals(history, [0], ["BUY"]), [1], [0.12]).iloc[0]
         assert result["Total Net Profit"] == 0 and result["Win Rate"] == 0
 
@@ -90,6 +105,16 @@ def check() -> None:
         assert np.isclose(result["Total Net Profit"], 1.76)
         empty = optimize(history, trades.iloc[:0], [1], [1]).iloc[0]
         assert empty["Total Net Profit"] == 0 and empty["Completed Trades"] == 0 and pd.isna(empty["Win Rate"])
+        assert empty[metric_columns].isna().all()
+
+        # Four TP trades held for 4, 3, 2, 1 hours; exclude one open trade and one pending entry.
+        history = candles([(100, 100, 100, 100)] * 5 + [(100, 101.5, 100, 101)])
+        trades = signals(history, [0, 1, 2, 3, 4, 5], ["SELL", "BUY", "BUY", "BUY", "BUY", "BUY"])
+        result = optimize(history, trades, [5], [1]).iloc[0]
+        assert result[["Completed Trades", "Open Trades", "Pending Entries"]].tolist() == [4, 1, 1]
+        assert np.allclose(result[metric_columns], [2.5, 3.85, 3.97, 4, 100])
+        unfinished = optimize(history.iloc[:5], trades.iloc[:4], [5], [1]).iloc[0]
+        assert unfinished["Completed Trades"] == 0 and unfinished[metric_columns].isna().all()
 
         # Compare the optimized grid against a direct chronological candle scan.
         rng = np.random.default_rng(7)
@@ -99,6 +124,8 @@ def check() -> None:
         grid = optimize(history, trades, [0.1, 1, 5], [0.1, 1, 5])
         for _, result in grid.iterrows():
             returns = []
+            durations = []
+            tp_count = 0
             for position, side in enumerate(trades.side):
                 if position + 1 == len(history):
                     continue
@@ -112,10 +139,16 @@ def check() -> None:
                     if stop_hit or target_hit:
                         exit_price = (min(row.open, stop) if direction == 1 else max(row.open, stop)) if stop_hit else (max(row.open, target) if direction == 1 else min(row.open, target))
                         returns.append(direction * (exit_price / entry - 1) * 100 - 0.12)
+                        at_open = (row.open <= stop if direction == 1 else row.open >= stop) if stop_hit else (row.open >= target if direction == 1 else row.open <= target)
+                        exit_time = row.Index if at_open else row.Index + pd.Timedelta(hours=1)
+                        durations.append((exit_time - history.index[position + 1]).total_seconds() / 3600)
+                        tp_count += not stop_hit
                         break
             assert result["Completed Trades"] == len(returns)
             assert np.isclose(result["Total Net Profit"], sum(returns))
             assert np.isclose(result["Win Rate"], 100 * sum(value > 0 for value in returns) / len(returns))
+            p95, p99 = np.percentile(durations, [95, 99], method="linear")
+            assert np.allclose(result[metric_columns], [np.mean(durations), p95, p99, max(durations), 100 * tp_count / len(returns)])
 
         # Training trades may not see validation candles.
         history = candles([(100, 100, 100, 100)] * 10 + [(100, 110, 90, 100)] * 2)
@@ -130,6 +163,8 @@ def check() -> None:
         other = chronological_validation(altered, trades)
         pd.testing.assert_series_equal(validation.iloc[0], other.iloc[0])
         assert validation["Signals"].tolist() == [7, 3]
+        assert np.allclose(validation.loc[0, metric_columns].to_numpy(dtype=float), [1.5, 1.95, 1.99, 2, 100])
+        assert np.allclose(validation.loc[1, metric_columns].to_numpy(dtype=float), [2, 2.9, 2.98, 3, 0])
 
     # Indicators and signals at a timestamp do not change when later candles arrive.
     prices = 100 + np.sin(np.arange(260) / 6) * 3 + np.arange(260) / 50
@@ -159,11 +194,18 @@ def check() -> None:
         assert path.read_text(encoding="utf-8") in html
         assert not re.search(r'<(?:script|link)[^>]+(?:src|href)=', html)
         for source, records in ((full, payload["results"]), (validation, payload["validation"])):
+            csv_path = Path(directory) / ("optimization.csv" if source is full else "validation.csv")
+            source.to_csv(csv_path, index=False)
+            exported = pd.read_csv(csv_path)
+            embedded = pd.DataFrame(records)
+            pd.testing.assert_frame_equal(exported, embedded[exported.columns], check_dtype=False)
+            assert set(metric_columns).issubset(exported.columns)
             for (_, row), record in zip(source.iterrows(), records):
                 if row["Completed Trades"]:
                     assert np.isclose(record["Average Net Profit per Trade"], row["Total Net Profit"] / row["Completed Trades"])
                 else:
                     assert record["Average Net Profit per Trade"] is None
+                    assert all(record[key] is None for key in metric_columns)
         assert report_records(pd.DataFrame()) == []
         no_completed = pd.DataFrame({"Total Net Profit": [0.0], "Completed Trades": [0]})
         assert report_records(no_completed)[0]["Average Net Profit per Trade"] is None
