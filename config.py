@@ -1,6 +1,6 @@
-"""Configuration for XAUT-USDT hourly signals."""
+"""Configuration for PAXG-USDT hourly signals."""
 
-SYMBOL: str = "XAUT-USDT"
+SYMBOL: str = "PAXG-USDT"
 KLINE_TYPE: str = "1hour"
 TIMEFRAME_SECONDS: int = 60 * 60
 WARMUP_CANDLES: int = 1500
