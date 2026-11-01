@@ -8,17 +8,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd
 
-import config
+import config_test as cfg
+from backtest import run_backtest
 from data_engine import DataEngine
 from indicators import compute_bias_and_votes
 from kucoin_rest import KuCoinREST
 from signals import compute_signals
-
-
-HISTORY_DIR = Path(__file__).resolve().parent / "history"
-SIGNALS_DIR = Path(__file__).resolve().parent / "signals"
-OHLC_COLUMNS = ["open", "high", "low", "close", "volume", "turnover"]
-WARMUP_CANDLES = 200  # EMA200 seeds on candle 200; the first valid crossover is on candle 201.
 
 
 def download_history(symbol: str, count: int) -> Path:
@@ -26,13 +21,13 @@ def download_history(symbol: str, count: int) -> Path:
     engine = DataEngine(rest)
     try:
         engine.sync_server_time()
-        end_at = int((engine.get_latest_closed_candle_ts() + pd.Timedelta(hours=1)).timestamp()) - 1
+        end_at = int((engine.get_latest_closed_candle_ts() + pd.Timedelta(seconds=cfg.TIMEFRAME_SECONDS)).timestamp()) - 1
         candles = []
         while len(candles) < count:
             # KuCoin's per-request limit is independent of the 200-candle warmup.
-            batch_size = min(1500, count - len(candles))
+            batch_size = min(cfg.DOWNLOAD_BATCH_SIZE, count - len(candles))
             batch = rest.get_klines(
-                start_at=end_at - batch_size * 3600 + 1,
+                start_at=end_at - batch_size * cfg.TIMEFRAME_SECONDS + 1,
                 end_at=end_at,
                 symbol=symbol,
             )
@@ -42,14 +37,14 @@ def download_history(symbol: str, count: int) -> Path:
             candles.extend(batch)
             end_at = min(candle.ts for candle in batch) - 1
             print(f"Downloaded {len(candles)}/{count} candles.")
-        history = engine._candles_to_df(candles)[OHLC_COLUMNS]
+        history = engine._candles_to_df(candles)[cfg.OHLC_COLUMNS]
     finally:
         rest.session.close()
 
     first = history.index.min().strftime("%Y-%m-%d_%Hh")
     last = history.index.max().strftime("%Y-%m-%d_%Hh")
-    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    path = HISTORY_DIR / f"{symbol}_1h_{first}_to_{last}_{len(history)}candles.csv"
+    cfg.HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    path = cfg.HISTORY_DIR / f"{symbol}_1h_{first}_to_{last}_{len(history)}candles.csv"
     history.to_csv(path, index_label="candle_open_utc")
     print(f"Original OHLC history saved: {path}")
     return path
@@ -58,36 +53,36 @@ def download_history(symbol: str, count: int) -> Path:
 def read_history(path: Path) -> pd.DataFrame:
     history = pd.read_csv(path, index_col="candle_open_utc")
     history.index = pd.to_datetime(history.index, utc=True)
-    return history[OHLC_COLUMNS].sort_index()
+    return history[cfg.OHLC_COLUMNS].sort_index()
 
 
 def write_signals(history: pd.DataFrame, history_path: Path) -> Path:
-    if len(history) <= WARMUP_CANDLES:
-        raise ValueError(f"History must contain more than {WARMUP_CANDLES} candles for warmup and testing.")
+    if len(history) <= cfg.WARMUP_CANDLES:
+        raise ValueError(f"History must contain more than {cfg.WARMUP_CANDLES} candles for warmup and testing.")
 
     # All reused indicators use trailing windows or past values, never future candles.
-    frame = compute_signals(compute_bias_and_votes(history, use_heikin_ashi=True))
+    frame = compute_signals(compute_bias_and_votes(history, use_heikin_ashi=cfg.USE_HEIKIN_ASHI))
     frame["candle_number"] = range(1, len(frame) + 1)
-    evaluated = frame.iloc[WARMUP_CANDLES:]
+    evaluated = frame.iloc[cfg.WARMUP_CANDLES:]
     signals = evaluated[evaluated["buy_signal"] | evaluated["sell_signal"]].copy()
     signals["side"] = signals["buy_signal"].map({True: "BUY", False: "SELL"})
     signals["symbol"] = history_path.name.split("_", 1)[0]
-    signals["candle_close_utc"] = signals.index + pd.Timedelta(hours=1)
+    signals["candle_close_utc"] = signals.index + pd.Timedelta(seconds=cfg.TIMEFRAME_SECONDS)
     signals = signals[
         ["symbol", "candle_number", "candle_close_utc", "side", "open", "high", "low", "close", "bias", "total_votes"]
     ]
 
-    SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
+    cfg.SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
     run_time = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d_%H-%M-%S-%f")
-    path = SIGNALS_DIR / f"{history_path.stem}_signals_HA_{run_time}.csv"
+    path = cfg.SIGNALS_DIR / f"{history_path.stem}_signals_HA_{run_time}.csv"
     signals.to_csv(path, index_label="candle_open_utc", mode="x")
-    print(f"History: {len(history)} candles; warmup: {WARMUP_CANDLES}; tested: {len(evaluated)}; signals: {len(signals)}.")
+    print(f"History: {len(history)} candles; warmup: {cfg.WARMUP_CANDLES}; tested: {len(evaluated)}; signals: {len(signals)}.")
     print(f"Heikin-Ashi signals saved: {path}")
     return path
 
 
 def main() -> int:
-    histories = sorted(HISTORY_DIR.glob("*_1h_*.csv"))
+    histories = sorted(cfg.HISTORY_DIR.glob("*_1h_*.csv"))
     print("1. Download history")
     if histories:
         print("2. Use existing history")
@@ -97,9 +92,9 @@ def main() -> int:
         symbol = input("Ticker (for example BTC-USDT): ").strip().upper().replace("/", "-")
         if not re.fullmatch(r"[A-Z0-9]+-[A-Z0-9]+", symbol):
             raise ValueError("Enter a ticker such as BTC-USDT or BTC/USDT.")
-        count = int(input(f"Total candles to download (includes {WARMUP_CANDLES} warmup candles): "))
-        if count <= WARMUP_CANDLES:
-            raise ValueError(f"Download at least {WARMUP_CANDLES + 1} candles.")
+        count = int(input(f"Total candles to download (includes {cfg.WARMUP_CANDLES} warmup candles): "))
+        if count <= cfg.WARMUP_CANDLES:
+            raise ValueError(f"Download at least {cfg.WARMUP_CANDLES + 1} candles.")
         history_path = download_history(symbol, count)
     elif choice == "2" and histories:
         for number, path in enumerate(histories, 1):
@@ -112,7 +107,8 @@ def main() -> int:
         raise ValueError("Choose an available option.")
 
     history = read_history(history_path)
-    write_signals(history, history_path)
+    signals_path = write_signals(history, history_path)
+    run_backtest(history, signals_path)
     return 0
 
 
