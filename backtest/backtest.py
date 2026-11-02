@@ -29,6 +29,8 @@ def optimize(
     tp_values: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """Sum completed trade returns in percentage points; leave open trades unrealized."""
+    if not (cfg.ENABLE_LONG or cfg.ENABLE_SHORT):
+        raise ValueError("At least one trade direction must be enabled: ENABLE_LONG or ENABLE_SHORT.")
     sl = percentage_range(cfg.SL_MIN_PCT, cfg.SL_MAX_PCT, cfg.SL_STEP_PCT) if sl_values is None else np.asarray(sl_values, dtype=float)
     tp = percentage_range(cfg.TP_MIN_PCT, cfg.TP_MAX_PCT, cfg.TP_STEP_PCT) if tp_values is None else np.asarray(tp_values, dtype=float)
     for values in (sl, tp):
@@ -62,6 +64,10 @@ def optimize(
     close_times = pd.to_datetime(signals["candle_close_utc"], utc=True)
     if not (close_times.array == signals.index + delta).all():
         raise ValueError("Signal candle_close_utc must equal candle_open_utc plus the timeframe.")
+
+    enabled = signals["side"].map({"BUY": cfg.ENABLE_LONG, "SELL": cfg.ENABLE_SHORT})
+    signal_positions = signal_positions[enabled]
+    signals = signals.loc[enabled]
 
     shape = (len(sl), len(tp))
     completed = np.zeros(shape, dtype=int)

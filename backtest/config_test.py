@@ -13,6 +13,9 @@ USE_HEIKIN_ASHI = True
 # EMA200 seeds on candle 200; the first fully warmed crossover is on candle 201.
 WARMUP_CANDLES = 200
 
+ENABLE_LONG = False
+ENABLE_SHORT = True
+
 # Percentage units: 0.1 means 0.1%, not 10%.
 SL_MIN_PCT = 0.1
 SL_MAX_PCT = 5.0

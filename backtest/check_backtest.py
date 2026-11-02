@@ -107,6 +107,26 @@ def check() -> None:
         assert empty["Total Net Profit"] == 0 and empty["Completed Trades"] == 0 and pd.isna(empty["Win Rate"])
         assert empty[metric_columns].isna().all()
 
+        # Disabled directions contribute no completed, open, or pending trades.
+        for sides in (["BUY", "BUY", "SELL", "BUY"], ["SELL", "SELL", "BUY", "SELL"]):
+            trades = signals(history, [0, 1, 3, 4], sides)
+            original = trades.copy(deep=True)
+            for side in ("BUY", "SELL"):
+                expected = optimize(history, trades.loc[trades["side"] == side], [1], [1])
+                with patch.object(cfg, "ENABLE_LONG", side == "BUY"), patch.object(cfg, "ENABLE_SHORT", side == "SELL"):
+                    pd.testing.assert_frame_equal(optimize(history, trades, [1], [1]), expected)
+                    excluded = optimize(history, trades.loc[trades["side"] != side], [1], [1]).iloc[0]
+                    assert excluded[["Completed Trades", "Open Trades", "Pending Entries", "Total Net Profit"]].eq(0).all()
+                    assert excluded[metric_columns + ["Win Rate"]].isna().all()
+            pd.testing.assert_frame_equal(trades, original)
+        with patch.object(cfg, "ENABLE_LONG", False), patch.object(cfg, "ENABLE_SHORT", False):
+            try:
+                optimize(history, trades, [1], [1])
+            except ValueError as exc:
+                assert "ENABLE_LONG or ENABLE_SHORT" in str(exc)
+            else:
+                raise AssertionError("Both trade directions disabled without a configuration error")
+
         # Four TP trades held for 4, 3, 2, 1 hours; exclude one open trade and one pending entry.
         history = candles([(100, 100, 100, 100)] * 5 + [(100, 101.5, 100, 101)])
         trades = signals(history, [0, 1, 2, 3, 4, 5], ["SELL", "BUY", "BUY", "BUY", "BUY", "BUY"])

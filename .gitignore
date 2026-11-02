@@ -4,4 +4,4 @@ __pycache__/
 .env
 /backtest/history/
 /backtest/signals/
-/backtest/results/
+/backtest/results*/
