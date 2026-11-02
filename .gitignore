@@ -2,6 +2,6 @@ __pycache__/
 *.py[cod]
 .venv/
 .env
-/test/history/
-/test/signals/
-/test/results/
+/backtest/history/
+/backtest/signals/
+/backtest/results/

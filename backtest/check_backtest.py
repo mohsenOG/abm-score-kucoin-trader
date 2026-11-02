@@ -1,4 +1,4 @@
-"""Run with: python test/check_backtest.py"""
+"""Run with: python backtest/check_backtest.py"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from xml.etree import ElementTree
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import numpy as np
 import pandas as pd
