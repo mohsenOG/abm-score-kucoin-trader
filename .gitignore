@@ -5,3 +5,4 @@ __pycache__/
 /backtest/history/
 /backtest/signals/
 /backtest/results*/
+/backtest/*.zip

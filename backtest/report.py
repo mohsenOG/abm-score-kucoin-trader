@@ -37,6 +37,7 @@ def write_report(
         "signals": len(signals),
         "warmup": cfg.WARMUP_CANDLES,
         "fee": cfg.FEE_PER_SIDE_PCT,
+        "maxHoldingHours": cfg.MAX_HOLDING_HOURS,
         "trainFraction": cfg.TRAIN_FRACTION,
         "topN": cfg.TOP_N,
         "pageSize": cfg.REPORT_PAGE_SIZE,

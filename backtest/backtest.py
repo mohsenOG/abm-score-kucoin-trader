@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import csv
 from decimal import Decimal
 from html import escape
 from pathlib import Path
+from typing import TextIO
 
 import numpy as np
 import pandas as pd
@@ -27,10 +29,14 @@ def optimize(
     signals: pd.DataFrame,
     sl_values: np.ndarray | None = None,
     tp_values: np.ndarray | None = None,
+    trades_file: TextIO | None = None,
 ) -> pd.DataFrame:
     """Sum completed trade returns in percentage points; leave open trades unrealized."""
     if not (cfg.ENABLE_LONG or cfg.ENABLE_SHORT):
         raise ValueError("At least one trade direction must be enabled: ENABLE_LONG or ENABLE_SHORT.")
+    limit = cfg.MAX_HOLDING_HOURS
+    if limit is not None and (type(limit) is not int or limit <= 0):
+        raise ValueError("MAX_HOLDING_HOURS must be None or a positive integer.")
     sl = percentage_range(cfg.SL_MIN_PCT, cfg.SL_MAX_PCT, cfg.SL_STEP_PCT) if sl_values is None else np.asarray(sl_values, dtype=float)
     tp = percentage_range(cfg.TP_MIN_PCT, cfg.TP_MAX_PCT, cfg.TP_STEP_PCT) if tp_values is None else np.asarray(tp_values, dtype=float)
     for values in (sl, tp):
@@ -78,11 +84,23 @@ def optimize(
     holding_hours = np.full((len(signals), *shape), np.nan)
     candle_hours = ((history.index - history.index[0]) / pd.Timedelta(hours=1)).to_numpy()
     timeframe_hours = delta / pd.Timedelta(hours=1)
+    limit_candles = None if limit is None else (limit * 3600 + cfg.TIMEFRAME_SECONDS - 1) // cfg.TIMEFRAME_SECONDS
+    writer = csv.writer(trades_file) if trades_file is not None else None
+    if writer is not None:
+        writer.writerow([
+            "signal_open_utc", "side", "SL", "TP", "entry_utc", "entry_price",
+            "exit_utc", "exit_price", "exit_reason", "net_return_pct", "holding_hours", "status",
+        ])
     pending = 0
     for signal_number, (position, side) in enumerate(zip(signal_positions, signals["side"])):
         entry_index = position + 1
         if entry_index == len(history):
             pending += 1
+            if writer is not None:
+                writer.writerows(
+                    (signals.index[signal_number].isoformat(), side, stop, target, "", "", "", "", "", "", "", "PENDING")
+                    for stop in sl for target in tp
+                )
             continue
         entry = opens[entry_index]
         direction = 1 if side == "BUY" else -1
@@ -96,25 +114,49 @@ def optimize(
         target_at = np.searchsorted(np.maximum.accumulate(favorable), direction * targets)
         stopped = stop_at[:, None] <= target_at[None, :]
         exit_at = np.minimum(stop_at[:, None], target_at[None, :])
+        time_at = len(adverse) if limit_candles is None else min(limit_candles, len(adverse))
+        at_limit = (time_at <= exit_at) & (time_at < len(adverse))
+        exit_at = np.minimum(exit_at, time_at)
         closed = exit_at < len(adverse)
         # Clamp only for array access; unfinished trades never contribute returns.
         exit_open = direction * opens[entry_index + np.minimum(exit_at, len(adverse) - 1)]
-        # SL wins ties, including a candle that gaps through TP and later reaches SL.
+        # Before the deadline, SL wins ties, including a TP gap followed by SL.
         exit_price = direction * np.where(
             stopped,
             np.minimum(exit_open, direction * stops[:, None]),
             np.maximum(exit_open, direction * targets[None, :]),
         )
+        exit_reason = np.where(stopped, "SL", "TP")
+        # At the deadline, inspect only Open; later intrabar prices cannot change the exit.
+        exit_reason = np.where(at_limit, np.where(
+            exit_open <= direction * stops[:, None], "SL",
+            np.where(exit_open >= direction * targets[None, :], "TP", "TIME"),
+        ), exit_reason)
+        exit_price = np.where(at_limit, direction * exit_open, exit_price)
         net = np.round(direction * (exit_price / entry - 1) * 100 - 2 * cfg.FEE_PER_SIDE_PCT, cfg.RETURN_DECIMALS)
         completed += closed
         wins += closed & (net > 0)
-        tp_exits += closed & ~stopped
+        tp_exits += closed & (exit_reason == "TP")
         total += np.where(closed, net, 0)
-        # Use the selected exit only: SL still wins a TP-gap/SL intrabar tie.
-        at_open = np.where(stopped, exit_open <= direction * stops[:, None], exit_open >= direction * targets[None, :])
+        # Deadline exits use Open; earlier exits retain the selected SL/TP timestamp.
+        at_open = at_limit | np.where(stopped, exit_open <= direction * stops[:, None], exit_open >= direction * targets[None, :])
         exit_hours = candle_hours[entry_index + np.minimum(exit_at, len(adverse) - 1)]
         duration = exit_hours - candle_hours[entry_index] + np.where(at_open, 0, timeframe_hours)
         holding_hours[signal_number] = np.where(closed, duration, np.nan)
+        if writer is not None:
+            writer.writerows(
+                (
+                    signals.index[signal_number].isoformat(), side, stop, target,
+                    history.index[entry_index].isoformat(), entry,
+                    (history.index[entry_index + exit_at[row, column]] + (pd.Timedelta(0) if at_open[row, column] else delta)).isoformat() if closed[row, column] else "",
+                    exit_price[row, column] if closed[row, column] else "",
+                    exit_reason[row, column] if closed[row, column] else "",
+                    net[row, column] if closed[row, column] else "",
+                    duration[row, column] if closed[row, column] else "",
+                    "COMPLETED" if closed[row, column] else "OPEN",
+                )
+                for row, stop in enumerate(sl) for column, target in enumerate(tp)
+            )
 
     win_rate = np.full(shape, np.nan)
     np.divide(100 * wins, completed, out=win_rate, where=completed > 0)
@@ -217,9 +259,11 @@ def run_backtest(history: pd.DataFrame, signals_path: Path) -> None:
     signals = pd.read_csv(signals_path, index_col="candle_open_utc")
     signals.index = pd.to_datetime(signals.index, utc=True)
     signals["candle_close_utc"] = pd.to_datetime(signals["candle_close_utc"], utc=True)
-    results = optimize(history, signals)
     cfg.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     prefix = cfg.RESULTS_DIR / signals_path.stem
+    trades_path = prefix.with_name(prefix.name + "_trades.csv")
+    with trades_path.open("x", encoding="utf-8", newline="") as trades_file:
+        results = optimize(history, signals, trades_file=trades_file)
     results_path = prefix.with_name(prefix.name + "_optimization.csv")
     heatmap_path = prefix.with_name(prefix.name + "_heatmap.svg")
     results.to_csv(results_path, index=False, mode="x")
@@ -229,6 +273,7 @@ def run_backtest(history: pd.DataFrame, signals_path: Path) -> None:
     print(results.head(cfg.TOP_N).to_string(index=False, float_format=lambda value: f"{value:.4f}", na_rep="N/A"))
     print("Open trades are unrealized. Pending entries have no next candle. Both are excluded from profit and win rate.")
     print(f"Full ranked table: {results_path}")
+    print(f"Per-trade exits for every SL/TP combination: {trades_path}")
     print(f"Profit heatmap: {heatmap_path}")
     validation = chronological_validation(history, signals)
     if not validation.empty:

@@ -165,12 +165,13 @@ metric("overview", "OHLC range: first Open to final Close (UTC)", `${utc(data.st
 metric("overview", "Total signals", integer(data.signals));
 metric("overview", "Combinations tested", integer(results.length));
 metric("overview", "Trading fees", `${number(data.fee)}% entry + ${number(data.fee)}% exit; flat ${number(2 * data.fee)} pp per completed trade`, "fees");
+metric("overview", "Holding time limit", data.maxHoldingHours === null ? "Unlimited" : `${integer(data.maxHoldingHours)} h`);
 metric("overview", "Warmup candles excluded from signals", integer(data.warmup));
 $("best-pair").textContent = `SL ${number(best.SL)}% / TP ${number(best.TP)}%`;
 for (const column of columns) metric("best-metrics", column.label || column.key, format(best[column.key], column), "", column.profit ? tone(best[column.key]) : "");
 metric("best-metrics", "Pending Entries", integer(best["Pending Entries"]));
 $("no-completed").hidden = best["Completed Trades"] > 0;
-$("holding-note").textContent = `Holding times use completed trades only and are candle-level estimates, not exact intrabar durations. Entry uses candle Open. Exits reached at candle Open use that timestamp; intrabar exits use candle Close. P95 and P99 use ${data.holdingPercentileMethod} interpolation. TP Hit Rate counts all TP exits, including trades with a net loss after fees.`;
+$("holding-note").textContent = `Holding times use completed trades only and are candle-level estimates, not exact intrabar durations. Entry uses candle Open. Exits reached at candle Open use that timestamp; intrabar exits use candle Close. Time exits use the first candle Open at or after the limit, with SL or TP taking priority at that Open. P95 and P99 use ${data.holdingPercentileMethod} interpolation. TP Hit Rate is TP exits divided by all completed trades, including TIME exits in the denominator. TP exits with a net loss after fees still count.`;
 $("footer").textContent = `All ${integer(results.length)} combinations and the SVG heatmap are embedded in this file. Pending entries are signals without a next candle. All timestamps are UTC.`;
 
 function rows(tableId, entries, fields = columns) {

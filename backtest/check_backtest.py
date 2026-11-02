@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 import config_test as cfg
-from backtest import chronological_validation, optimize, percentage_range, write_heatmap
+from backtest import chronological_validation, optimize, percentage_range, run_backtest, write_heatmap
 from indicators import compute_bias_and_votes
 from main_test import write_signals
 from report import report_records, write_report
@@ -136,6 +136,77 @@ def check() -> None:
         unfinished = optimize(history.iloc[:5], trades.iloc[:4], [5], [1]).iloc[0]
         assert unfinished["Completed Trades"] == 0 and unfinished[metric_columns].isna().all()
 
+        for invalid in (0, -1, 1.5, 24.0, True, "24"):
+            with patch.object(cfg, "MAX_HOLDING_HOURS", invalid):
+                try:
+                    optimize(history, trades, [1], [1])
+                except ValueError as exc:
+                    assert "MAX_HOLDING_HOURS" in str(exc)
+                else:
+                    raise AssertionError("Invalid holding limit accepted")
+
+        # Deadline Open takes priority over later extremes, including SL/TP ties.
+        for side, deadline, reason, expected in (
+            ("BUY", (100, 110, 90, 100), "TIME", -0.12),
+            ("SELL", (100, 110, 90, 100), "TIME", -0.12),
+            ("BUY", (102, 103, 98, 100), "TP", 1.88),
+            ("SELL", (98, 102, 97, 100), "TP", 1.88),
+            ("BUY", (98, 103, 97, 100), "SL", -2.12),
+            ("SELL", (102, 103, 97, 100), "SL", -2.12),
+            ("BUY", (101, 102, 98, 100), "TP", 0.88),
+            ("SELL", (101, 102, 98, 100), "SL", -1.12),
+            ("BUY", (100.5, 110, 90, 100), "TIME", 0.38),
+            ("SELL", (99.5, 110, 90, 100), "TIME", 0.38),
+        ):
+            history = candles([(100, 100, 100, 100)] * 2 + [deadline])
+            output = io.StringIO()
+            with patch.object(cfg, "MAX_HOLDING_HOURS", 1):
+                result = optimize(history, signals(history, [0], [side]), [1], [1], output).iloc[0]
+            logged = pd.read_csv(io.StringIO(output.getvalue())).iloc[0]
+            assert logged.exit_reason == reason and logged.status == "COMPLETED"
+            assert logged.exit_price == deadline[0] and np.isclose(logged.net_return_pct, expected)
+            assert logged.holding_hours == 1 and pd.Timestamp(logged.exit_utc) == history.index[2]
+            assert result["Completed Trades"] == 1 and np.isclose(result["Total Net Profit"], expected)
+            assert result["Win Rate"] == (100 if expected > 0 else 0)
+            assert result["tp_hit_rate_pct"] == (100 if reason == "TP" else 0)
+            assert result[metric_columns[:4]].eq(1).all()
+
+        # Limits start at entry Open; no timeout can use a missing future Open.
+        for limit in (1, 7, 24, 72, 168):
+            history = candles([(100, 100, 100, 100)] * (limit + 2))
+            trades = signals(history, [0, limit, limit + 1], ["BUY", "SELL", "BUY"])
+            output = io.StringIO()
+            with patch.object(cfg, "MAX_HOLDING_HOURS", limit):
+                result = optimize(history, trades, [1, 2], [1, 2], output)
+                unfinished = optimize(history.iloc[:-1], trades.iloc[:1], [1], [1]).iloc[0]
+            logged = pd.read_csv(io.StringIO(output.getvalue()))
+            assert len(logged) == len(trades) * 4
+            assert result["Completed Trades"].eq(1).all() and result["Open Trades"].eq(1).all()
+            assert result["Pending Entries"].eq(1).all() and result["avg_holding_hours"].eq(limit).all()
+            assert logged.loc[logged.status == "COMPLETED", "exit_reason"].eq("TIME").all()
+            assert logged.loc[logged.status != "COMPLETED", ["exit_reason", "exit_utc", "exit_price", "net_return_pct"]].isna().all().all()
+            assert unfinished["Open Trades"] == 1 and unfinished["Completed Trades"] == 0
+        unlimited = optimize(history, trades, [1], [1])
+        with patch.object(cfg, "MAX_HOLDING_HOURS", 10**30):
+            pd.testing.assert_frame_equal(optimize(history, trades, [1], [1]), unlimited)
+
+        # Before the deadline, preserve the existing SL-first rule and count TIME in the TP denominator.
+        history = candles([(100, 100, 100, 100), (100, 102, 98, 100), (100, 101.5, 100, 100)] + [(100, 100, 100, 100)] * 3)
+        with patch.object(cfg, "MAX_HOLDING_HOURS", 2):
+            output = io.StringIO()
+            result = optimize(history, signals(history, [0, 1, 2], ["BUY"] * 3), [1], [1], output).iloc[0]
+        logged = pd.read_csv(io.StringIO(output.getvalue()))
+        assert logged.exit_reason.tolist() == ["SL", "TP", "TIME"]
+        assert result["Completed Trades"] == 3 and np.isclose(result["tp_hit_rate_pct"], 100 / 3)
+        assert np.isclose(result["Total Net Profit"], -0.36) and np.isclose(result["Win Rate"], 100 / 3)
+
+        # A limit between candle Opens exits at the next Open.
+        history = candles([(100, 100, 100, 100)] * 4)
+        history.index = pd.date_range("2025-01-01", periods=4, freq="2h", tz="UTC")
+        with patch.object(cfg, "TIMEFRAME_SECONDS", 7200), patch.object(cfg, "MAX_HOLDING_HOURS", 3):
+            result = optimize(history, signals(history, [0], ["BUY"]), [1], [1]).iloc[0]
+        assert result["Completed Trades"] == 1 and result["avg_holding_hours"] == 4
+
         # Compare the optimized grid against a direct chronological candle scan.
         rng = np.random.default_rng(7)
         opens = 100 + rng.normal(0, 0.5, 40).cumsum()
@@ -185,6 +256,12 @@ def check() -> None:
         assert validation["Signals"].tolist() == [7, 3]
         assert np.allclose(validation.loc[0, metric_columns].to_numpy(dtype=float), [1.5, 1.95, 1.99, 2, 100])
         assert np.allclose(validation.loc[1, metric_columns].to_numpy(dtype=float), [2, 2.9, 2.98, 3, 0])
+        with patch.object(cfg, "MAX_HOLDING_HOURS", 2):
+            limited = chronological_validation(history, trades)
+            changed = chronological_validation(altered, trades)
+        pd.testing.assert_series_equal(limited.iloc[0], changed.iloc[0])
+        assert limited["Signals"].tolist() == [7, 3]
+        assert limited.loc[0, "Completed Trades"] > 0 and limited.loc[0, "max_holding_hours"] <= 2
 
     # Indicators and signals at a timestamp do not change when later candles arrive.
     prices = 100 + np.sin(np.arange(260) / 6) * 3 + np.arange(260) / 50
@@ -235,6 +312,24 @@ def check() -> None:
         assert '"symbol": "\\u003cscript>"' in escaped_path.read_text(encoding="utf-8")
         pd.testing.assert_frame_equal(full, original)
         pd.testing.assert_frame_equal(validation, validation_before)
+        # Export all combinations and statuses; CSV totals must match the summary.
+        source = Path(directory) / "CHECK-USDT_signals.csv"
+        signals(history, [200, 230, 259], ["BUY", "SELL", "BUY"]).to_csv(source, index_label="candle_open_utc")
+        output = Path(directory) / "results"
+        with patch.multiple(cfg, RESULTS_DIR=output, MAX_HOLDING_HOURS=2, SL_MIN_PCT=5, SL_MAX_PCT=6, SL_STEP_PCT=1, TP_MIN_PCT=5, TP_MAX_PCT=5):
+            run_backtest(history, source)
+        logged = pd.read_csv(next(output.glob("*_trades.csv")))
+        summary = pd.read_csv(next(output.glob("*_optimization.csv")))
+        assert len(logged) == 6 and logged.status.value_counts().to_dict() == {"COMPLETED": 4, "PENDING": 2}
+        assert logged.loc[logged.status == "COMPLETED", "exit_reason"].eq("TIME").all()
+        for row in summary.itertuples(index=False, name=None):
+            stop, target = row[:2]
+            completed = logged.loc[(logged.SL == stop) & (logged.TP == target) & (logged.status == "COMPLETED")]
+            result = summary.loc[(summary.SL == stop) & (summary.TP == target)].iloc[0]
+            assert result["Completed Trades"] == len(completed) and np.isclose(result["Total Net Profit"], completed.net_return_pct.sum())
+        report_html = next(output.glob("*_report.html")).read_text(encoding="utf-8")
+        report_data = json.loads(re.search(r'<script type="application/json" id="report-data">(.*?)</script>', report_html, re.S).group(1))
+        assert report_data["maxHoldingHours"] == 2
     print("Backtest checks passed.")
 
 
